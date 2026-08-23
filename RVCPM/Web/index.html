@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://rvcpm.local; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>RVCPM</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="titlebar">
+      <div class="title-drag" id="titleDrag">
+        <div class="brand-mark image-mark"><img src="rvcpm-icon.png" alt="RVCPM icon" /></div>
+        <div class="brand-copy">
+          <div class="brand-title">RVCPM</div>
+          <div class="brand-sub">Rider's Vencord custom plugin manager</div>
+        </div>
+      </div>
+      <div class="title-status" id="titleStatus"></div>
+      <div class="window-buttons">
+        <button class="window-btn" data-window="windowMinimize" aria-label="Minimize">—</button>
+        <button class="window-btn" data-window="windowMaximize" aria-label="Maximize">□</button>
+        <button class="window-btn close" data-window="windowClose" aria-label="Close">×</button>
+      </div>
+    </header>
+
+    <div id="restartBanner" class="restart-banner hidden">
+      <div class="restart-icon">↻</div>
+      <div><strong data-i18n="restartRequired">Discord restart required</strong><span data-i18n="restartHint">Changes are staged safely and will be applied before Discord starts again.</span></div>
+      <button class="btn primary small" id="restartDiscordBtn" data-i18n="restartDiscord">Restart Discord</button>
+    </div>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <nav class="nav-list">
+          <button class="nav-item active" data-page="library"><span class="nav-icon">◆</span><span data-i18n="library">Library</span><span class="nav-count" id="pluginCount">0</span></button>
+          <button class="nav-item" data-page="install"><span class="nav-icon">＋</span><span data-i18n="install">Install</span></button>
+          <button class="nav-item" data-page="updates"><span class="nav-icon">⇧</span><span data-i18n="updates">Updates</span><span class="nav-dot hidden" id="updateDot"></span></button>
+          <button class="nav-item" data-page="logs"><span class="nav-icon">≡</span><span data-i18n="logs">Logs</span></button>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <nav class="nav-list bottom-nav">
+          <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span><span data-i18n="settings">Settings</span></button>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="tiny-label" data-i18n="managedData">Managed data</div>
+          <button class="path-chip" id="dataPathBtn" title="Open RVCPM AppData"><span id="dataPathShort">%LOCALAPPDATA%\RVCPM</span><b>↗</b></button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="page active" id="page-library">
+          <div class="page-head">
+            <div>
+              <div class="eyebrow">RVCPM</div>
+              <h1 data-i18n="customPlugins">Custom plugins</h1>
+              <p data-i18n="librarySubtitle">Install, update, configure and control Vencord userplugins from one place.</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn ghost" id="checkUpdatesTop"><span>↻</span><span data-i18n="checkUpdates">Check updates</span></button>
+              <button class="btn primary" data-goto="install"><span>＋</span><span data-i18n="addPlugins">Add plugins</span></button>
+            </div>
+          </div>
+
+          <div class="health-grid" id="healthGrid">
+            <div class="health-card"><span class="health-dot" id="discordDot"></span><div><small>Discord</small><strong id="discordState">—</strong></div></div>
+            <div class="health-card"><span class="health-dot accent"></span><div><small>Vencord</small><strong id="vencordState">—</strong></div></div>
+            <div class="health-card"><span class="health-dot violet"></span><div><small>Plugins+</small><strong id="pluginsPlusState">—</strong></div></div>
+          </div>
+
+          <div id="emptyLibrary" class="empty-state hidden">
+            <div class="empty-orbit"><div class="brand-mark big image-mark"><img src="rvcpm-icon.png" alt="RVCPM icon" /></div></div>
+            <h2 data-i18n="noPlugins">No custom plugins yet</h2>
+            <p data-i18n="dropStart">Drop .ts/.tsx files, a plugin folder or ZIP here — or install from GitHub.</p>
+            <div class="empty-actions">
+              <button class="btn primary" id="emptyFiles" data-i18n="chooseFiles">Choose files</button>
+              <button class="btn ghost" id="emptyGithub">GitHub</button>
+            </div>
+          </div>
+          <div class="plugin-grid" id="pluginGrid"></div>
+        </section>
+
+        <section class="page" id="page-install">
+          <div class="page-head">
+            <div><div class="eyebrow" data-i18n="packageSources">Package sources</div><h1 data-i18n="installPlugins">Install plugins</h1><p data-i18n="installSubtitle">RVCPM validates plugin entry points, stores its own copy in AppData and rebuilds the latest Vencord automatically.</p></div>
+          </div>
+
+          <div class="drop-zone" id="dropZone">
+            <div class="drop-rings"><div></div><div></div><div></div><span>＋</span></div>
+            <h2 data-i18n="dropHere">Drop plugins here</h2>
+            <p data-i18n="dropTypes">.ts · .tsx · plugin folders · .zip</p>
+            <div class="drop-actions">
+              <button class="btn primary" id="pickFiles"><span>⌁</span><span data-i18n="files">Files</span></button>
+              <button class="btn ghost" id="pickFolder"><span>▣</span><span data-i18n="folder">Folder</span></button>
+            </div>
+          </div>
+
+          <div class="source-divider"><span data-i18n="orGithub">or install from GitHub</span></div>
+          <div class="github-card">
+            <div class="github-logo">GH</div>
+            <div class="github-main">
+              <h3>GitHub</h3>
+              <p data-i18n="githubHint">Repository, /tree/ path or direct /blob/ plugin URL.</p>
+              <div class="url-row">
+                <input id="githubUrl" class="text-input" placeholder="https://github.com/owner/repository" />
+                <button id="githubAnalyze" class="btn primary" data-i18n="analyze">Analyze</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="support-card">
+            <h3 data-i18n="supportedFormats">Supported Vencord plugin layouts</h3>
+            <div id="supportedList" class="support-list"></div>
+            <div class="notice"><b>native.ts</b><span data-i18n="nativeNote">is supported as a companion Node/Electron file inside a plugin folder. CSS and other imported assets are copied with the plugin. They are not independent plugin entry points.</span></div>
+            <div class="notice warning"><b>⚠</b><span data-i18n="securityNote">Custom Vencord plugins execute code inside Discord. Install plugins only from sources you trust.</span></div>
+          </div>
+        </section>
+
+        <section class="page" id="page-updates">
+          <div class="page-head">
+            <div><div class="eyebrow" data-i18n="maintenance">Maintenance</div><h1 data-i18n="updates">Updates</h1><p data-i18n="updatesSubtitle">Check GitHub commits, local source changes and refresh Vencord before one combined rebuild.</p></div>
+            <div class="head-actions"><button class="btn ghost" id="checkUpdatesPage" data-i18n="checkUpdates">Check updates</button><button class="btn primary" id="updateAllBtn" data-i18n="updateAll">Update all + Vencord</button></div>
+          </div>
+          <div class="update-summary" id="updateSummary"></div>
+          <div class="update-list" id="updateList"></div>
+        </section>
+
+        <section class="page" id="page-logs">
+          <div class="page-head compact">
+            <div><div class="eyebrow" data-i18n="diagnostics">Diagnostics</div><h1 data-i18n="logs">Logs</h1></div>
+            <div class="head-actions"><button class="btn ghost" id="clearLogs" data-i18n="clear">Clear</button><button class="btn ghost" id="copyLogs" data-i18n="copy">Copy</button></div>
+          </div>
+          <pre class="log-view" id="logView"></pre>
+        </section>
+
+        <section class="page" id="page-settings">
+          <div class="page-head"><div><div class="eyebrow">RVCPM</div><h1 data-i18n="settings">Settings</h1><p data-i18n="settingsSubtitle">Machine-specific configuration is stored under Local AppData.</p></div></div>
+          <div class="settings-layout">
+            <div class="settings-group">
+              <h3 data-i18n="interface">Interface</h3>
+              <label class="setting-row"><div><strong data-i18n="language">Language</strong><span data-i18n="languageHint">English is the default for new installations.</span></div><select id="languageSelect" class="select"><option value="en">English</option><option value="ru">Русский</option><option value="uk">Українська</option></select></label>
+            </div>
+            <div class="settings-group">
+              <h3>Discord & Vencord</h3>
+              <label class="setting-row"><div><strong data-i18n="discordBranch">Discord channel</strong><span data-i18n="branchHint">Auto prefers a currently running installation, then Stable.</span></div><select id="branchSelect" class="select"><option value="auto">Auto</option><option value="stable">Stable</option><option value="ptb">PTB</option><option value="canary">Canary</option></select></label>
+              <div class="setting-row"><div><strong data-i18n="customLocation">Custom Discord location</strong><span id="customLocationText" class="mono-sub">—</span></div><button class="btn ghost small" id="chooseDiscordLocation" data-i18n="choose">Choose</button></div>
+              <label class="setting-row"><div><strong data-i18n="autoUpdateVencord">Update Vencord before builds</strong><span data-i18n="autoUpdateVencordHint">Fetches origin/main before installing, removing or updating plugins.</span></div><input type="checkbox" class="toggle" id="autoUpdateVencord" /></label>
+              <label class="setting-row"><div><strong data-i18n="autoRestart">Restart Discord after rebuild</strong><span data-i18n="autoRestartHint">Only restarts Discord if it was running when the operation began.</span></div><input type="checkbox" class="toggle" id="autoRestart" /></label>
+              <label class="setting-row"><div><strong data-i18n="enableAfterInstall">Enable plugins after install</strong><span data-i18n="enableAfterInstallHint">RVCPM stages the enabled state and safely applies it during restart.</span></div><input type="checkbox" class="toggle" id="enableAfterInstall" /></label>
+              <label class="setting-row"><div><strong data-i18n="devBuild">Vencord Dev Build</strong><span data-i18n="devBuildHint">Needed only for *.dev.ts(x) userplugins; normal users should leave this off.</span></div><input type="checkbox" class="toggle" id="devBuild" /></label>
+            </div>
+            <div class="settings-group">
+              <h3 data-i18n="paths">Paths</h3>
+              <div class="path-row"><span data-i18n="managerData">RVCPM data</span><code id="settingsDataPath"></code><button class="icon-btn" id="openDataFolder">↗</button></div>
+              <div class="path-row"><span data-i18n="vencordSource">Managed Vencord source</span><code id="settingsVencordPath"></code></div>
+              <div class="path-row"><span data-i18n="vencordSettings">Vencord settings.json</span><code id="settingsJsonPath"></code></div>
+            </div>
+            <div class="settings-group danger-lite">
+              <h3 data-i18n="maintenance">Maintenance</h3>
+              <div class="setting-row"><div><strong data-i18n="forceRebuild">Update + rebuild + inject</strong><span data-i18n="forceRebuildHint">Recreates src/userplugins from RVCPM's library and injects a fresh build.</span></div><button class="btn primary" id="forceRebuild" data-i18n="rebuild">Rebuild</button></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot" class="toast-root"></div>
+
+  <div id="operationOverlay" class="operation-overlay hidden">
+    <div class="operation-card">
+      <div class="op-top"><div class="op-spinner"></div><div><div class="eyebrow">RVCPM pipeline</div><h2 id="opTitle">Working…</h2><p id="opMessage">Preparing</p></div></div>
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      <pre id="opLog" class="op-log"></pre>
+      <div class="op-actions"><span id="opPercent">—</span><button class="btn danger ghost" id="cancelOperation" data-i18n="cancel">Cancel</button></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
