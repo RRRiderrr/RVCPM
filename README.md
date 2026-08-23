@@ -6,7 +6,8 @@
   **A modern Windows manager for Vencord custom plugins.**  
   Install, update, configure and control userplugins without manually touching `src/userplugins`, `pnpm` or the Vencord build pipeline.
 
-  [![Version](https://img.shields.io/badge/version-0.1.3-5865F2?style=flat-square)](#)
+  [![Version](https://img.shields.io/badge/version-0.1.3-5865F2?style=flat-square)](../../releases/latest)
+  [![Download](https://img.shields.io/badge/Download-Latest%20Release-23A55A?style=flat-square&logo=github&logoColor=white)](../../releases/latest)
   [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-5865F2?style=flat-square&logo=windows11&logoColor=white)](#)
   [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.7.2-512BD4?style=flat-square&logo=dotnet&logoColor=white)](#)
   [![WebView2](https://img.shields.io/badge/UI-WebView2-5C2D91?style=flat-square&logo=microsoftedge&logoColor=white)](#)
@@ -16,6 +17,26 @@
 </div>
 
 ---
+
+## Download
+
+The easiest way to use RVCPM is to download the **prebuilt Windows package** from GitHub Releases.
+
+<div align="center">
+
+### [⬇ Download the latest RVCPM release](../../releases/latest)
+
+</div>
+
+1. Open **Releases**.
+2. Download the ZIP archive with the latest Windows build.
+3. Extract it to any folder.
+4. Run `RVCPM.exe`.
+
+No Visual Studio build is required for normal use. RVCPM keeps its own configuration, managed plugin packages, Vencord checkout and working data under `%LOCALAPPDATA%\RVCPM`.
+
+> [!TIP]
+> The source-code ZIP generated automatically by GitHub is **not** the ready-to-run application package. Download the prebuilt RVCPM ZIP attached to the release under **Assets**.
 
 ## What is RVCPM?
 
@@ -47,9 +68,15 @@ Drop a plugin into the app, paste a GitHub link, select what you want to install
 
 ## Quick start
 
-### 1. Launch RVCPM
+### 1. Download and launch RVCPM
 
-Build the project using `Build_Release.bat` or Visual Studio, then run `RVCPM.exe`.
+Go to the [latest GitHub Release](../../releases/latest), download the **prebuilt ZIP from Assets**, extract it and run:
+
+```text
+RVCPM.exe
+```
+
+If you want to modify RVCPM itself, see [Building from source](#building-from-source) instead.
 
 ### 2. Add plugins
 
@@ -275,6 +302,8 @@ RVCPM checks the required build tools and can bootstrap missing Git/Node compone
 
 ## Building from source
 
+This section is for developers or users who want to modify RVCPM. **Normal users should download the prebuilt ZIP from [GitHub Releases](../../releases/latest).**
+
 ### Visual Studio
 
 Open:
@@ -348,6 +377,7 @@ Some Vencord settings are custom React components or dynamic code. Recreating ar
 
 ## Related links
 
+- [RVCPM Releases](../../releases/latest)
 - [Vencord](https://github.com/Vendicated/Vencord)
 - [Vencord custom plugin documentation](https://docs.vencord.dev/installing/custom-plugins/)
 - [Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
@@ -355,5 +385,6 @@ Some Vencord settings are custom React components or dynamic code. Recreating ar
 ---
 
 <div align="center">
-  <sub><b>RVCPM</b> — custom Vencord plugins without the repetitive build work.</sub>
+  <sub><b>RVCPM</b> — custom Vencord plugins without the repetitive build work.</sub><br>
+  <sub><a href="../../releases/latest">Download the latest release</a></sub>
 </div>
