@@ -6,7 +6,7 @@ namespace RVCPM
 {
     public sealed class AppConfig
     {
-        public int SchemaVersion { get; set; } = 1;
+        public int SchemaVersion { get; set; } = 2;
         public string Language { get; set; } = "en";
         public string DiscordBranch { get; set; } = "auto";
         public string CustomDiscordLocation { get; set; } = "";
@@ -15,12 +15,14 @@ namespace RVCPM
         public bool EnablePluginsAfterInstall { get; set; } = true;
         public bool DevBuild { get; set; } = false;
         public bool PendingRestart { get; set; } = false;
+        public bool PendingBuildChanges { get; set; } = false;
         public DateTime? LastBuildUtc { get; set; }
         public string LastVencordCommit { get; set; } = "";
         public string LastVencordVersion { get; set; } = "";
         public List<ManagedPlugin> Plugins { get; set; } = new List<ManagedPlugin>();
         public List<ManagedRepository> Repositories { get; set; } = new List<ManagedRepository>();
         public Dictionary<string, JObject> PendingPluginSettings { get; set; } = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+        public List<ManagedPlugin> PendingPackageCleanup { get; set; } = new List<ManagedPlugin>();
     }
 
     public enum PluginSourceKind
@@ -134,7 +136,17 @@ namespace RVCPM
         public JToken DefaultValue { get; set; }
         public bool RestartNeeded { get; set; }
         public bool UnsupportedOutsideDiscord { get; set; }
+        // Vencord's OptionType.CUSTOM is storage, not a generic settings control.
+        // COMPONENT is user-facing, but its React component can only run inside Discord.
+        public bool UserFacing { get; set; } = true;
+        public bool EditableInManager { get; set; } = true;
+        public bool Hidden { get; set; }
+        public bool Disabled { get; set; }
+        public bool ConditionalVisibility { get; set; }
+        public bool ConditionalDisabled { get; set; }
+        public string Placeholder { get; set; } = "";
         public bool Multiline { get; set; }
+        public bool StickToMarkers { get; set; }
         public List<PluginSettingOption> Options { get; set; } = new List<PluginSettingOption>();
         public List<double> Markers { get; set; } = new List<double>();
     }

@@ -32,3 +32,5 @@
   background:color-mix(in srgb,var(--yellow-text,#f0b232) 14%,transparent);
   border:1px solid color-mix(in srgb,var(--yellow-text,#f0b232) 28%,transparent);
 }
+.custom-ui-pill{color:#c8b5ff;background:rgba(169,112,255,.10);border:1px solid rgba(169,112,255,.18)}
+.custom-settings-card{display:flex;gap:13px;align-items:flex-start;padding:14px 15px;border:1px solid rgba(169,112,255,.25);background:linear-gradient(135deg,rgba(169,112,255,.09),rgba(88,101,242,.06));border-radius:10px;margin-top:4px}.custom-settings-icon{width:30px;height:30px;flex:0 0 30px;border-radius:8px;display:grid;place-items:center;background:rgba(169,112,255,.14);color:#c9b6ff;font-size:17px}.custom-settings-card .plugin-setting-desc{margin-top:5px;line-height:1.5}.setting-runtime-note{margin-top:5px;color:#8f96a0;font-size:10px;line-height:1.35}.plugin-setting input:disabled,.plugin-setting textarea:disabled,.plugin-setting select:disabled{opacity:.5;cursor:not-allowed}

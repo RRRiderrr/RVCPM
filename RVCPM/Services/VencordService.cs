@@ -30,11 +30,11 @@ namespace RVCPM.Services
             _log = log;
         }
 
-        public async Task BuildAndInjectAsync(bool updateVencord, CancellationToken token, VencordSettingsService.Snapshot failureSettingsSnapshot = null)
+        public async Task BuildAndInjectAsync(bool updateVencord, CancellationToken token, VencordSettingsService.Snapshot failureSettingsSnapshot = null, bool forceRestart = false)
         {
-            var wasRunning = _discord.IsAnyDiscordRunning();
-            var shouldRestart = wasRunning && _store.Config.AutoRestartAfterInstall;
-            var stopBranch = string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation) ? _store.Config.DiscordBranch : "auto";
+            var runningKinds = _discord.GetRunningDiscordKinds();
+            var wasRunning = runningKinds.Count > 0;
+            var shouldRestart = wasRunning && (forceRestart || _store.Config.AutoRestartAfterInstall);
             var settingsSnapshot = _settings.CaptureSnapshot();
             var settingsFlushed = false;
             try
@@ -60,7 +60,11 @@ namespace RVCPM.Services
                 if (!build.Success) throw new InvalidOperationException("Vencord build failed.\n" + build.Error);
 
                 _progress(new OperationProgress { Stage = "discord", Message = "Preparing Discord for injection", Percent = 78 });
-                if (wasRunning) await _discord.StopAsync(stopBranch, token).ConfigureAwait(false);
+                if (wasRunning)
+                {
+                    _progress(new OperationProgress { Stage = "discord", Message = "Closing Discord automatically", Percent = 78, CanCancel = false });
+                    await _discord.StopAsync("auto", token).ConfigureAwait(false);
+                }
                 if (!_discord.IsAnyDiscordRunning())
                 {
                     _settings.FlushPending();
@@ -107,9 +111,18 @@ namespace RVCPM.Services
                     {
                         _progress(new OperationProgress { Stage = "discord", Message = "Starting Discord", Percent = 100, CanCancel = false });
                         if (!string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation))
+                        {
                             await _discord.StartCustomAsync(_store.Config.CustomDiscordLocation).ConfigureAwait(false);
+                        }
+                        else if ((_store.Config.DiscordBranch ?? "auto").Equals("auto", StringComparison.OrdinalIgnoreCase) && runningKinds.Count > 0)
+                        {
+                            foreach (var kind in runningKinds.Distinct(StringComparer.OrdinalIgnoreCase))
+                                await _discord.StartAsync(kind).ConfigureAwait(false);
+                        }
                         else
+                        {
                             await _discord.StartAsync(_store.Config.DiscordBranch).ConfigureAwait(false);
+                        }
                     }
                     catch { }
                 }

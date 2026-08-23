@@ -35,7 +35,7 @@ namespace RVCPM.Services
                 EnabledByDefault = candidate.EnabledByDefault,
                 Required = candidate.Required,
                 RequiresRestart = candidate.RequiresRestart,
-                HasSettings = candidate.Settings != null && candidate.Settings.Count > 0,
+                HasSettings = HasUserFacingSettings(candidate.Settings),
                 Settings = candidate.Settings ?? new List<PluginSettingSchema>(),
                 Dependencies = candidate.Dependencies ?? new List<string>(),
                 SourceIsFile = candidate.IsFile,
@@ -160,6 +160,21 @@ namespace RVCPM.Services
             plugin.UpdateAvailable = false;
         }
 
+        public bool RefreshInstalledMetadata(AppConfig config, ManagedPlugin plugin)
+        {
+            var source = GetSourcePath(config, plugin);
+            if (!File.Exists(source) && !Directory.Exists(source)) return false;
+            var candidate = _parser.ParseCandidate(source, plugin.RelativePath, File.Exists(source) || plugin.SourceIsFile);
+            if (candidate == null && Directory.Exists(source))
+                candidate = _parser.ParseCandidate(source, plugin.RelativePath, false);
+            if (candidate == null || !candidate.Name.Equals(plugin.Name, StringComparison.Ordinal)) return false;
+
+            var oldSignature = SettingsSignature(plugin.Settings);
+            var oldHas = plugin.HasSettings;
+            ApplyCandidateMetadata(plugin, candidate);
+            return oldSignature != SettingsSignature(plugin.Settings) || oldHas != plugin.HasSettings;
+        }
+
         public void RefreshMetadata(AppConfig config, ManagedPlugin plugin)
         {
             string source;
@@ -281,6 +296,23 @@ namespace RVCPM.Services
             }
         }
 
+
+        private static bool HasUserFacingSettings(IEnumerable<PluginSettingSchema> settings)
+        {
+            return settings != null && settings.Any(x => x.UserFacing && !x.Hidden);
+        }
+
+        private static string SettingsSignature(IEnumerable<PluginSettingSchema> settings)
+        {
+            if (settings == null) return "";
+            return string.Join("|", settings.Select(x => string.Join(":", new[]
+            {
+                x.Key ?? "", x.Type.ToString(), x.UserFacing.ToString(), x.EditableInManager.ToString(),
+                x.Hidden.ToString(), x.Disabled.ToString(), x.ConditionalVisibility.ToString(), x.ConditionalDisabled.ToString(),
+                x.DisplayName ?? "", x.Description ?? "", x.Placeholder ?? ""
+            })));
+        }
+
         private static void ApplyCandidateMetadata(ManagedPlugin plugin, PluginCandidate c)
         {
             plugin.PluginDescription = c.Description ?? plugin.PluginDescription;
@@ -289,7 +321,7 @@ namespace RVCPM.Services
             plugin.Author = c.Author ?? plugin.Author;
             if (!string.IsNullOrWhiteSpace(c.Version)) plugin.Version = c.Version;
             plugin.Settings = c.Settings ?? new List<PluginSettingSchema>();
-            plugin.HasSettings = plugin.Settings.Count > 0;
+            plugin.HasSettings = HasUserFacingSettings(plugin.Settings);
             plugin.Dependencies = c.Dependencies ?? new List<string>();
             plugin.EnabledByDefault = c.EnabledByDefault;
             plugin.Required = c.Required;

@@ -127,12 +127,6 @@ namespace RVCPM.Services
         {
             lock (_sync)
             {
-                if (!_discord.IsAnyDiscordRunning())
-                {
-                    ApplyPatchToFile(pluginName, patch);
-                    return;
-                }
-
                 JObject existing;
                 if (!_store.Config.PendingPluginSettings.TryGetValue(pluginName, out existing))
                 {
@@ -142,7 +136,7 @@ namespace RVCPM.Services
                 foreach (var p in patch.Properties()) existing[p.Name] = p.Value.DeepClone();
                 _store.Config.PendingRestart = true;
                 _store.Save();
-                _log("Staged Vencord settings change for " + pluginName + "; Discord restart required.");
+                _log("Staged Vencord settings change for " + pluginName + "; waiting for Apply changes.");
             }
         }
 

@@ -33,34 +33,131 @@ namespace RVCPM.Services
 
         public async Task StopAsync(string branch, CancellationToken token)
         {
-            var kinds = ResolveKinds(branch, true);
+            // Settings/injection are only safe when every Discord Desktop process is gone.
+            // For "auto" we snapshot every currently running Discord channel. For an explicit
+            // branch we still include any other running Discord channel because Vencord's
+            // settings file must not be edited while another Discord instance is alive.
+            var kinds = GetRunningDiscordKinds();
+            if (!string.IsNullOrWhiteSpace(branch) && !branch.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                var explicitKind = branch.ToLowerInvariant();
+                if (!kinds.Contains(explicitKind, StringComparer.OrdinalIgnoreCase)) kinds.Add(explicitKind);
+            }
+            kinds = kinds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (kinds.Count == 0) return;
+
+            // First ask the UI process(es) to close normally.
             foreach (var kind in kinds)
             {
                 var processName = ProcessName(kind);
-                foreach (var p in Process.GetProcessesByName(processName))
+                foreach (var p in SafeGetProcesses(processName))
                 {
                     token.ThrowIfCancellationRequested();
                     try
                     {
                         _log("Closing " + processName + " (PID " + p.Id + ")...");
-                        if (!p.CloseMainWindow()) p.Kill();
+                        p.CloseMainWindow();
                     }
                     catch { }
+                    finally { try { p.Dispose(); } catch { } }
                 }
             }
 
-            for (var i = 0; i < 20 && ResolveKinds(branch, true).Any(k => Process.GetProcessesByName(ProcessName(k)).Length > 0); i++)
+            if (await WaitUntilStoppedAsync(kinds, 2500, token).ConfigureAwait(false))
             {
-                token.ThrowIfCancellationRequested();
-                await Task.Delay(250, token).ConfigureAwait(false);
+                // Give Discord/Vencord a short moment to release settings.json after process exit.
+                await Task.Delay(350, token).ConfigureAwait(false);
+                return;
             }
 
+            // Graceful close did not finish everything. Force-kill all remaining Discord processes.
             foreach (var kind in kinds)
             {
-                foreach (var p in Process.GetProcessesByName(ProcessName(kind)))
+                var processName = ProcessName(kind);
+                foreach (var p in SafeGetProcesses(processName))
                 {
-                    try { p.Kill(); } catch { }
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        _log("Force stopping " + processName + " (PID " + p.Id + ")...");
+                        p.Kill();
+                        try { p.WaitForExit(2500); } catch { }
+                    }
+                    catch { }
+                    finally { try { p.Dispose(); } catch { } }
                 }
+            }
+
+            if (!await WaitUntilStoppedAsync(kinds, 3500, token).ConfigureAwait(false))
+            {
+                // Last-resort Windows process-tree termination. Discord can occasionally leave a
+                // renderer/updater child alive for a fraction of a second after Process.Kill().
+                foreach (var kind in kinds)
+                {
+                    token.ThrowIfCancellationRequested();
+                    TryTaskKill(ProcessName(kind) + ".exe");
+                }
+            }
+
+            if (!await WaitUntilStoppedAsync(kinds, 5000, token).ConfigureAwait(false))
+            {
+                var alive = kinds.Where(IsKindRunning).Select(ProcessName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                throw new InvalidOperationException("RVCPM could not stop Discord automatically. Still running: " + string.Join(", ", alive));
+            }
+
+            await Task.Delay(500, token).ConfigureAwait(false);
+            _log("Discord fully stopped; settings are safe to apply.");
+        }
+
+        private static Process[] SafeGetProcesses(string processName)
+        {
+            try { return Process.GetProcessesByName(processName); }
+            catch { return new Process[0]; }
+        }
+
+        private static bool IsKindRunning(string kind)
+        {
+            var processes = SafeGetProcesses(ProcessName(kind));
+            try { return processes.Length > 0; }
+            finally
+            {
+                foreach (var p in processes) try { p.Dispose(); } catch { }
+            }
+        }
+
+        private static async Task<bool> WaitUntilStoppedAsync(IEnumerable<string> kinds, int timeoutMs, CancellationToken token)
+        {
+            var watch = Stopwatch.StartNew();
+            while (watch.ElapsedMilliseconds < timeoutMs)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!kinds.Any(IsKindRunning)) return true;
+                await Task.Delay(150, token).ConfigureAwait(false);
+            }
+            return !kinds.Any(IsKindRunning);
+        }
+
+        private void TryTaskKill(string exeName)
+        {
+            try
+            {
+                _log("Using taskkill for remaining " + exeName + " process tree...");
+                using (var killer = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = "/F /T /IM \"" + exeName + "\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }))
+                {
+                    if (killer != null) killer.WaitForExit(5000);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log("taskkill fallback failed for " + exeName + ": " + ex.Message);
             }
         }
 

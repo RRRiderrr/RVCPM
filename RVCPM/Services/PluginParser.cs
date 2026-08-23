@@ -22,6 +22,8 @@ namespace RVCPM.Services
         private static readonly Regex StringLiteralRegex = new Regex(@"(['""`])(?<v>(?:\\.|(?!\1).)*?)\1", RegexOptions.Singleline | RegexOptions.Compiled);
         private static readonly Regex RelativeImportRegex = new Regex(@"(?:from\s*|import\s*\(\s*|import\s+)(['""])(?<v>\.{1,2}/[^'""]+)\1", RegexOptions.Singleline | RegexOptions.Compiled);
 
+        private static readonly Regex SettingsCallRegex = new Regex(@"\bdefinePluginSettings\s*(?:<[^;{}()]*>)?\s*\(", RegexOptions.Singleline | RegexOptions.Compiled);
+
         public PluginCandidate ParseCandidate(string sourcePath, string relativePath, bool isFile)
         {
             var entry = isFile ? sourcePath : ResolveEntry(sourcePath);
@@ -30,6 +32,19 @@ namespace RVCPM.Services
             var text = File.ReadAllText(entry);
             var nameMatch = NameRegex.Match(text);
             if (!nameMatch.Success) return null;
+
+            var parsedSettings = ParseSettings(entry, text);
+            if (Regex.IsMatch(text, @"\bsettingsAboutComponent\s*:"))
+            {
+                parsedSettings.Add(new PluginSettingSchema
+                {
+                    Key = "__settingsAboutComponent",
+                    Type = PluginSettingType.Component,
+                    UserFacing = true,
+                    EditableInManager = false,
+                    UnsupportedOutsideDiscord = true
+                });
+            }
 
             var candidate = new PluginCandidate
             {
@@ -45,7 +60,7 @@ namespace RVCPM.Services
                 Required = MatchBool(RequiredRegex, text),
                 RequiresRestart = MatchBool(RequiresRestartRegex, text),
                 Dependencies = ParseDependencies(text),
-                Settings = ParseSettings(text)
+                Settings = parsedSettings
             };
 
             candidate.TargetSuffix = DetectTargetSuffix(isFile ? Path.GetFileNameWithoutExtension(sourcePath) : Path.GetFileName(sourcePath));
@@ -129,32 +144,73 @@ namespace RVCPM.Services
             return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private static List<PluginSettingSchema> ParseSettings(string text)
+        private static List<PluginSettingSchema> ParseSettings(string entryFile, string text)
         {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<PluginSettingSchema>();
-            var idx = text.IndexOf("definePluginSettings", StringComparison.Ordinal);
-            if (idx < 0) return result;
-            var paren = text.IndexOf('(', idx);
-            if (paren < 0) return result;
-            var brace = FindNextNonSpace(text, paren + 1, '{');
-            if (brace < 0) return result;
-            var objectText = ExtractBalanced(text, brace, '{', '}');
-            if (string.IsNullOrWhiteSpace(objectText)) return result;
+            ParseSettingsRecursive(entryFile, text, visited, result, 0);
+            return result.GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase).Select(x => x.First()).ToList();
+        }
 
-            var inner = objectText.Substring(1, objectText.Length - 2);
-            foreach (var property in SplitTopLevel(inner, ','))
+        private static void ParseSettingsRecursive(string file, string text, HashSet<string> visited, List<PluginSettingSchema> result, int depth)
+        {
+            if (depth > 8 || string.IsNullOrWhiteSpace(file)) return;
+            string full;
+            try { full = Path.GetFullPath(file); } catch { return; }
+            if (!visited.Add(full)) return;
+
+            foreach (Match call in SettingsCallRegex.Matches(text))
             {
-                var colon = FindTopLevelColon(property);
-                if (colon <= 0) continue;
-                var key = property.Substring(0, colon).Trim().Trim('\'', '"');
-                if (!Regex.IsMatch(key, @"^[A-Za-z_$][\w$]*$")) continue;
-                var value = property.Substring(colon + 1).Trim();
-                if (!value.StartsWith("{", StringComparison.Ordinal)) continue;
+                var paren = text.IndexOf('(', call.Index);
+                if (paren < 0) continue;
+                var brace = FindNextNonSpace(text, paren + 1, '{');
+                if (brace < 0) continue;
+                var objectText = ExtractBalanced(text, brace, '{', '}');
+                if (string.IsNullOrWhiteSpace(objectText)) continue;
 
-                var setting = ParseSettingObject(key, value);
-                if (setting != null) result.Add(setting);
+                var inner = objectText.Substring(1, objectText.Length - 2);
+                foreach (var property in SplitTopLevel(inner, ','))
+                {
+                    var colon = FindTopLevelColon(property);
+                    if (colon <= 0) continue;
+                    var key = property.Substring(0, colon).Trim().Trim('\'', '"');
+                    if (!Regex.IsMatch(key, @"^[A-Za-z_$][\w$]*$")) continue;
+                    var value = property.Substring(colon + 1).Trim();
+                    if (!value.StartsWith("{", StringComparison.Ordinal)) continue;
+                    var setting = ParseSettingObject(key, value);
+                    if (setting != null) result.Add(setting);
+                }
             }
-            return result;
+
+            // Many real Vencord plugins keep definePluginSettings in ./settings.ts(x)
+            // and merely import/export the resulting object from index.tsx.
+            var baseDir = Path.GetDirectoryName(full);
+            if (string.IsNullOrWhiteSpace(baseDir)) return;
+            foreach (var import in FindRelativeImports(full))
+            {
+                var imported = ResolveTypeScriptImport(baseDir, import);
+                if (imported == null || visited.Contains(imported)) continue;
+                try { ParseSettingsRecursive(imported, File.ReadAllText(imported), visited, result, depth + 1); }
+                catch { }
+            }
+        }
+
+        private static string ResolveTypeScriptImport(string baseDir, string import)
+        {
+            try
+            {
+                var raw = Path.GetFullPath(Path.Combine(baseDir, import.Replace('/', Path.DirectorySeparatorChar)));
+                var candidates = new[]
+                {
+                    raw,
+                    raw + ".ts",
+                    raw + ".tsx",
+                    Path.Combine(raw, "index.ts"),
+                    Path.Combine(raw, "index.tsx")
+                };
+                return candidates.FirstOrDefault(File.Exists);
+            }
+            catch { return null; }
         }
 
         private static PluginSettingSchema ParseSettingObject(string key, string objectText)
@@ -164,6 +220,8 @@ namespace RVCPM.Services
             if (!typeMatch.Success)
             {
                 schema.Type = PluginSettingType.Unknown;
+                schema.UserFacing = false;
+                schema.EditableInManager = false;
                 schema.UnsupportedOutsideDiscord = true;
                 return schema;
             }
@@ -175,26 +233,75 @@ namespace RVCPM.Services
                 case "BOOLEAN": schema.Type = PluginSettingType.Boolean; break;
                 case "SELECT": schema.Type = PluginSettingType.Select; break;
                 case "SLIDER": schema.Type = PluginSettingType.Slider; break;
-                case "BIGINT": schema.Type = PluginSettingType.BigInt; schema.UnsupportedOutsideDiscord = true; break;
-                case "COMPONENT": schema.Type = PluginSettingType.Component; schema.UnsupportedOutsideDiscord = true; break;
-                case "CUSTOM": schema.Type = PluginSettingType.Custom; break;
-                default: schema.Type = PluginSettingType.Unknown; schema.UnsupportedOutsideDiscord = true; break;
+                case "BIGINT":
+                    schema.Type = PluginSettingType.BigInt;
+                    schema.EditableInManager = false;
+                    schema.UnsupportedOutsideDiscord = true;
+                    break;
+                case "COMPONENT":
+                    // A COMPONENT is a real user-facing settings surface, but it is arbitrary
+                    // React/Vencord/Discord code and cannot be executed safely in RVCPM's WebView.
+                    schema.Type = PluginSettingType.Component;
+                    schema.UserFacing = true;
+                    schema.EditableInManager = false;
+                    schema.UnsupportedOutsideDiscord = true;
+                    break;
+                case "CUSTOM":
+                    // In Vencord, CUSTOM is intentionally raw/non-user-facing storage. It is
+                    // commonly used for hashes, credentials, caches, maps and component state.
+                    // Never expose it as a generic JSON editor.
+                    schema.Type = PluginSettingType.Custom;
+                    schema.UserFacing = false;
+                    schema.EditableInManager = false;
+                    schema.UnsupportedOutsideDiscord = true;
+                    break;
+                default:
+                    schema.Type = PluginSettingType.Unknown;
+                    schema.UserFacing = false;
+                    schema.EditableInManager = false;
+                    schema.UnsupportedOutsideDiscord = true;
+                    break;
             }
 
-            schema.DisplayName = ExtractStringProperty(objectText, "displayName") ?? Humanize(key);
+            schema.DisplayName = ExtractStringProperty(objectText, "displayName") ?? (schema.UserFacing && schema.Type != PluginSettingType.Component ? Humanize(key) : "");
             schema.Description = ExtractStringProperty(objectText, "description") ?? "";
+            schema.Placeholder = ExtractStringProperty(objectText, "placeholder") ?? "";
             schema.RestartNeeded = ExtractBoolProperty(objectText, "restartNeeded");
             schema.Multiline = ExtractBoolProperty(objectText, "multiline");
+            schema.StickToMarkers = ExtractBoolProperty(objectText, "stickToMarkers");
             schema.DefaultValue = ExtractLiteralProperty(objectText, "default");
+
+            bool staticBool;
+            if (TryExtractStaticBoolProperty(objectText, "hidden", out staticBool))
+                schema.Hidden = staticBool;
+            else if (HasProperty(objectText, "hidden"))
+                schema.ConditionalVisibility = true;
+
+            if (TryExtractStaticBoolProperty(objectText, "disabled", out staticBool))
+                schema.Disabled = staticBool;
+            else if (HasProperty(objectText, "disabled"))
+                schema.ConditionalDisabled = true;
+
+            if (schema.Hidden) schema.UserFacing = false;
 
             if (schema.Type == PluginSettingType.Select)
                 schema.Options = ParseSelectOptions(objectText);
             if (schema.Type == PluginSettingType.Slider)
                 schema.Markers = ParseNumberArrayProperty(objectText, "markers");
 
-            if (schema.Type == PluginSettingType.Custom && schema.DefaultValue == null)
-                schema.UnsupportedOutsideDiscord = true;
             return schema;
+        }
+
+        private static bool HasProperty(string objectText, string property)
+        {
+            return Regex.IsMatch(objectText, @"\b" + Regex.Escape(property) + @"\s*:");
+        }
+
+        private static bool TryExtractStaticBoolProperty(string objectText, string property, out bool value)
+        {
+            value = false;
+            var m = Regex.Match(objectText, @"\b" + Regex.Escape(property) + @"\s*:\s*(?<v>true|false)\b", RegexOptions.IgnoreCase);
+            return m.Success && bool.TryParse(m.Groups["v"].Value, out value);
         }
 
         private static List<PluginSettingOption> ParseSelectOptions(string objectText)

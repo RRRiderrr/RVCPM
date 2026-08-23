@@ -194,6 +194,7 @@ namespace RVCPM
                 case "checkUpdates": await _manager.CheckUpdatesAsync(); return _manager.GetState();
                 case "updatePlugin": await _manager.UpdatePluginAsync((string)payload["pluginId"]); return _manager.GetState();
                 case "updateAll": await _manager.UpdateAllAsync(); return _manager.GetState();
+                case "applyPendingChanges": await _manager.ApplyPendingChangesAsync(); return _manager.GetState();
                 case "restartDiscord": await _manager.RestartDiscordAsync(); return _manager.GetState();
                 case "rebuild": await _manager.RebuildAsync((bool?)payload["updateVencord"] ?? true); return _manager.GetState();
                 case "saveAppSettings": _manager.SaveAppSettings(payload); return _manager.GetState();

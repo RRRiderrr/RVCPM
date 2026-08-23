@@ -40,19 +40,13 @@ namespace RVCPM.Services
             _vencord = new VencordService(_store, _runner, _packages, _discord, _settings, ReportProgress, Log);
 
             CleanupUnreferencedRepositories();
-            try
-            {
-                if (!_discord.IsAnyDiscordRunning() && _store.Config.PendingPluginSettings.Count > 0)
-                    _settings.FlushPending();
-            }
-            catch (Exception ex) { Log("Pending settings could not be applied: " + ex.Message); }
+            RefreshManagedPluginMetadata();
         }
 
         public AppConfig Config { get { return _store.Config; } }
 
         public JObject GetState()
         {
-            TryFlushPendingIfStopped();
             var plugins = new JArray();
             foreach (var p in _store.Config.Plugins.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
             {
@@ -72,7 +66,9 @@ namespace RVCPM.Services
                     ["enabled"] = p.Required || ((bool?)effective["enabled"] ?? p.EnabledByDefault),
                     ["required"] = p.Required,
                     ["hasSettings"] = p.HasSettings,
-                    ["settingsCount"] = p.Settings == null ? 0 : p.Settings.Count,
+                    ["settingsCount"] = CountManagerEditableSettings(p.Settings),
+                    ["customSettingsUi"] = HasCustomSettingsUi(p.Settings),
+                    ["customSettingsUiCount"] = CountCustomSettingsUi(p.Settings),
                     ["requiresRestart"] = p.RequiresRestart,
                     ["updateAvailable"] = p.UpdateAvailable,
                     ["target"] = string.IsNullOrWhiteSpace(p.TargetSuffix) ? "desktop/default" : p.TargetSuffix,
@@ -84,7 +80,7 @@ namespace RVCPM.Services
 
             return new JObject
             {
-                ["appVersion"] = "0.1.1",
+                ["appVersion"] = "0.1.6",
                 ["language"] = _store.Config.Language ?? "en",
                 ["discordBranch"] = _store.Config.DiscordBranch ?? "auto",
                 ["customDiscordLocation"] = _store.Config.CustomDiscordLocation ?? "",
@@ -93,6 +89,9 @@ namespace RVCPM.Services
                 ["enableAfterInstall"] = _store.Config.EnablePluginsAfterInstall,
                 ["devBuild"] = _store.Config.DevBuild,
                 ["pendingRestart"] = _store.Config.PendingRestart,
+                ["pendingBuildChanges"] = _store.Config.PendingBuildChanges,
+                ["pendingChanges"] = _store.Config.PendingRestart || _store.Config.PendingBuildChanges,
+                ["pendingChangeCount"] = _store.Config.PendingPluginSettings.Count + (_store.Config.PendingBuildChanges ? 1 : 0),
                 ["discordStatus"] = _discord.GetStatusLabel(),
                 ["discordRunning"] = _discord.IsAnyDiscordRunning(),
                 ["vencordInstalledByManager"] = Directory.Exists(Path.Combine(AppPaths.VencordDir, ".git")),
@@ -240,17 +239,13 @@ namespace RVCPM.Services
             if (duplicateSelection != null)
                 throw new InvalidOperationException("The selected package contains multiple plugins with the same Vencord name: " + duplicateSelection.Key + ". Select only one copy.");
 
-            await RunExclusiveAsync("install", async token =>
+            await RunExclusiveAsync("stageInstall", async token =>
             {
                 var added = new List<ManagedPlugin>();
                 var replaced = new List<Tuple<ManagedPlugin, int>>();
                 var pendingBefore = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
-                var settingsBefore = _settings.CaptureSnapshot();
-                var buildStarted = false;
                 try
                 {
-                    // Re-importing a plugin with the same Vencord name is treated as an update/replacement.
-                    // Keep the previous package on disk until the new build has been injected successfully.
                     foreach (var c in selected)
                     {
                         var existing = _store.Config.Plugins.FirstOrDefault(x => x.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase));
@@ -261,7 +256,7 @@ namespace RVCPM.Services
                         if (_store.Config.PendingPluginSettings.TryGetValue(existing.Name, out oldPending))
                             pendingBefore[existing.Name] = (JObject)oldPending.DeepClone();
                         _store.Config.Plugins.Remove(existing);
-                        Log("Replacing managed plugin: " + existing.Name);
+                        Log("Staging replacement for managed plugin: " + existing.Name);
                     }
 
                     ManagedRepository repo = null;
@@ -270,6 +265,7 @@ namespace RVCPM.Services
 
                     foreach (var c in selected)
                     {
+                        token.ThrowIfCancellationRequested();
                         if (c.Name.Equals("RVCPMIntegration", StringComparison.OrdinalIgnoreCase))
                             throw new InvalidOperationException("'RVCPMIntegration' is reserved for RVCPM's internal Vencord integration.");
                         if (c.TargetSuffix == "web" || c.TargetSuffix == "browser" || c.TargetSuffix == "vesktop")
@@ -288,20 +284,17 @@ namespace RVCPM.Services
                         if (_store.Config.EnablePluginsAfterInstall && !wasReplacement)
                             _settings.StageEnabled(p.Name, true);
                     }
-                    _store.Save();
-
-                    buildStarted = true;
-                    await _vencord.BuildAndInjectAsync(true, token, settingsBefore).ConfigureAwait(false);
 
                     foreach (var old in replaced)
-                    {
-                        _packages.RemovePackageFiles(old.Item1);
-                        RemoveUnusedRepository(old.Item1.RepositoryId);
-                    }
+                        if (!_store.Config.PendingPackageCleanup.Any(x => x.Id == old.Item1.Id))
+                            _store.Config.PendingPackageCleanup.Add(old.Item1);
 
+                    _store.Config.PendingBuildChanges = true;
+                    _store.Save();
                     CleanupBatch(batch);
                     CandidateBatch removed;
                     _batches.TryRemove(batch.Id, out removed);
+                    Log("Plugin changes staged. Use Apply changes to rebuild Vencord once for all pending changes.");
                     Raise("stateChanged", GetState());
                 }
                 catch
@@ -319,15 +312,6 @@ namespace RVCPM.Services
                         JObject pending;
                         if (pendingBefore.TryGetValue(old.Item1.Name, out pending))
                             _store.Config.PendingPluginSettings[old.Item1.Name] = pending;
-                    }
-                    if (!buildStarted)
-                    {
-                        try
-                        {
-                            if (_discord.IsAnyDiscordRunning()) _settings.RestorePendingSnapshot(settingsBefore);
-                            else _settings.RestoreSnapshot(settingsBefore);
-                        }
-                        catch (Exception restoreEx) { Log("Could not restore settings after failed install preparation: " + restoreEx.Message); }
                     }
                     _store.Save();
                     throw;
@@ -349,7 +333,7 @@ namespace RVCPM.Services
             var p = FindPlugin(pluginId);
             var effective = _settings.GetEffectivePluginObject(p.Name);
             var array = new JArray();
-            foreach (var s in p.Settings ?? new List<PluginSettingSchema>())
+            foreach (var s in (p.Settings ?? new List<PluginSettingSchema>()).Where(IsManagerEditableSetting))
             {
                 JToken value = effective[s.Key];
                 if (value == null && s.DefaultValue != null) value = s.DefaultValue.DeepClone();
@@ -368,19 +352,32 @@ namespace RVCPM.Services
                     ["defaultValue"] = s.DefaultValue ?? JValue.CreateNull(),
                     ["restartNeeded"] = s.RestartNeeded,
                     ["unsupported"] = s.UnsupportedOutsideDiscord,
+                    ["disabled"] = s.Disabled,
+                    ["conditionalVisibility"] = s.ConditionalVisibility,
+                    ["conditionalDisabled"] = s.ConditionalDisabled,
+                    ["placeholder"] = s.Placeholder ?? "",
                     ["multiline"] = s.Multiline,
+                    ["stickToMarkers"] = s.StickToMarkers,
                     ["options"] = JArray.FromObject(s.Options ?? new List<PluginSettingOption>()),
                     ["markers"] = JArray.FromObject(s.Markers ?? new List<double>())
                 });
             }
-            return new JObject { ["pluginId"] = p.Id, ["pluginName"] = p.Name, ["settings"] = array };
+            return new JObject
+            {
+                ["pluginId"] = p.Id,
+                ["pluginName"] = p.Name,
+                ["settings"] = array,
+                ["hasCustomSettingsUi"] = HasCustomSettingsUi(p.Settings),
+                ["customSettingsUiCount"] = CountCustomSettingsUi(p.Settings),
+                ["internalSettingCount"] = (p.Settings ?? new List<PluginSettingSchema>()).Count(x => !x.UserFacing || x.Type == PluginSettingType.Custom)
+            };
         }
 
         public void SavePluginSettings(string pluginId, JObject values)
         {
             var p = FindPlugin(pluginId);
             var patch = new JObject();
-            foreach (var schema in p.Settings ?? new List<PluginSettingSchema>())
+            foreach (var schema in (p.Settings ?? new List<PluginSettingSchema>()).Where(IsManagerEditableSetting))
             {
                 if (schema.UnsupportedOutsideDiscord || values[schema.Key] == null) continue;
                 patch[schema.Key] = values[schema.Key].DeepClone();
@@ -393,28 +390,19 @@ namespace RVCPM.Services
 
         public async Task RemovePluginAsync(string pluginId, bool removeSettings)
         {
-            await RunExclusiveAsync("remove", async token =>
+            await RunExclusiveAsync("stageRemove", async token =>
             {
+                token.ThrowIfCancellationRequested();
                 var p = FindPlugin(pluginId);
-                var settingsBefore = _settings.CaptureSnapshot();
-                var index = _store.Config.Plugins.FindIndex(x => x.Id == p.Id);
-                _store.Config.Plugins.RemoveAt(index);
+                _store.Config.Plugins.RemoveAll(x => x.Id == p.Id);
+                if (!_store.Config.PendingPackageCleanup.Any(x => x.Id == p.Id))
+                    _store.Config.PendingPackageCleanup.Add(p);
                 if (removeSettings) _settings.StageRemovePluginSettings(p.Name);
+                _store.Config.PendingBuildChanges = true;
                 _store.Save();
-                try
-                {
-                    await _vencord.BuildAndInjectAsync(_store.Config.AutoUpdateVencordBeforeBuild, token, settingsBefore).ConfigureAwait(false);
-                    _packages.RemovePackageFiles(p);
-                    RemoveUnusedRepository(p.RepositoryId);
-                    _store.Save();
-                    Raise("stateChanged", GetState());
-                }
-                catch
-                {
-                    _store.Config.Plugins.Insert(Math.Min(index, _store.Config.Plugins.Count), p);
-                    _store.Save();
-                    throw;
-                }
+                Log("Plugin removal staged: " + p.Name);
+                Raise("stateChanged", GetState());
+                await Task.CompletedTask;
             }).ConfigureAwait(false);
         }
 
@@ -467,9 +455,10 @@ namespace RVCPM.Services
                     {
                         _packages.UpdateFromLocalSource(_store.Config, p);
                     }
+                    _store.Config.PendingBuildChanges = true;
                     _store.Save();
-                    await _vencord.BuildAndInjectAsync(_store.Config.AutoUpdateVencordBeforeBuild, token).ConfigureAwait(false);
                     CleanupPluginRollback(rollback);
+                    Log("Plugin update staged: " + p.Name);
                     Raise("stateChanged", GetState());
                 }
                 catch
@@ -511,9 +500,10 @@ namespace RVCPM.Services
                     {
                         if (_packages.CheckLocalUpdate(_store.Config, p)) _packages.UpdateFromLocalSource(_store.Config, p);
                     }
+                    _store.Config.PendingBuildChanges = true;
                     _store.Save();
-                    await _vencord.BuildAndInjectAsync(true, token).ConfigureAwait(false);
                     CleanupPluginRollback(rollback);
+                    Log("Plugin updates staged. Apply changes when ready.");
                     Raise("stateChanged", GetState());
                 }
                 catch
@@ -528,9 +518,52 @@ namespace RVCPM.Services
         {
             return RunExclusiveAsync("rebuild", async token =>
             {
-                await _vencord.BuildAndInjectAsync(updateVencord, token).ConfigureAwait(false);
+                await _vencord.BuildAndInjectAsync(updateVencord, token, null, true).ConfigureAwait(false);
+                FinalizeAppliedChanges();
                 Raise("stateChanged", GetState());
             });
+        }
+
+        public async Task ApplyPendingChangesAsync()
+        {
+            await RunExclusiveAsync("applyChanges", async token =>
+            {
+                if (!_store.Config.PendingBuildChanges && _store.Config.PendingPluginSettings.Count == 0 && !_store.Config.PendingRestart)
+                {
+                    ReportProgress(new OperationProgress { Stage = "done", Message = "No pending changes", Percent = 100, CanCancel = false });
+                    return;
+                }
+
+                if (_store.Config.PendingBuildChanges)
+                {
+                    // Structural plugin changes require one combined Vencord rebuild/injection.
+                    // Always refresh Vencord here so a staged install still fulfils RVCPM's latest-Vencord guarantee.
+                    await _vencord.BuildAndInjectAsync(true, token, null, true).ConfigureAwait(false);
+                }
+                else
+                {
+                    var running = _discord.GetRunningDiscordKinds();
+                    var wasRunning = running.Count > 0;
+                    ReportProgress(new OperationProgress { Stage = "discord", Message = "Closing Discord automatically", Percent = 30, CanCancel = false });
+                    if (wasRunning) await _discord.StopAsync("auto", token).ConfigureAwait(false);
+                    ReportProgress(new OperationProgress { Stage = "discord", Message = "Applying staged plugin settings", Percent = 55, CanCancel = false });
+                    _settings.FlushPending();
+                    if (wasRunning)
+                    {
+                        ReportProgress(new OperationProgress { Stage = "discord", Message = "Starting Discord", Percent = 85, CanCancel = false });
+                        if (!string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation))
+                            await _discord.StartCustomAsync(_store.Config.CustomDiscordLocation).ConfigureAwait(false);
+                        else if ((_store.Config.DiscordBranch ?? "auto") == "auto" && running.Count > 0)
+                            foreach (var kind in running) await _discord.StartAsync(kind).ConfigureAwait(false);
+                        else
+                            await _discord.StartAsync(_store.Config.DiscordBranch).ConfigureAwait(false);
+                    }
+                }
+
+                FinalizeAppliedChanges();
+                ReportProgress(new OperationProgress { Stage = "done", Message = "All pending changes applied", Percent = 100, CanCancel = false });
+                Raise("stateChanged", GetState());
+            }).ConfigureAwait(false);
         }
 
         public async Task RestartDiscordAsync()
@@ -538,9 +571,8 @@ namespace RVCPM.Services
             await RunExclusiveAsync("restart", async token =>
             {
                 var running = _discord.GetRunningDiscordKinds();
-                ReportProgress(new OperationProgress { Stage = "discord", Message = "Restarting Discord", Percent = 20 });
-                var stopBranch = string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation) ? _store.Config.DiscordBranch : "auto";
-                await _discord.StopAsync(stopBranch, token).ConfigureAwait(false);
+                ReportProgress(new OperationProgress { Stage = "discord", Message = "Closing Discord automatically", Percent = 20, CanCancel = false });
+                await _discord.StopAsync("auto", token).ConfigureAwait(false);
                 _settings.FlushPending();
                 if (!string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation))
                 {
@@ -564,7 +596,12 @@ namespace RVCPM.Services
             if (values["autoUpdateVencord"] != null) _store.Config.AutoUpdateVencordBeforeBuild = (bool)values["autoUpdateVencord"];
             if (values["autoRestartAfterInstall"] != null) _store.Config.AutoRestartAfterInstall = (bool)values["autoRestartAfterInstall"];
             if (values["enableAfterInstall"] != null) _store.Config.EnablePluginsAfterInstall = (bool)values["enableAfterInstall"];
-            if (values["devBuild"] != null) _store.Config.DevBuild = (bool)values["devBuild"];
+            if (values["devBuild"] != null)
+            {
+                var newDevBuild = (bool)values["devBuild"];
+                if (newDevBuild != _store.Config.DevBuild) _store.Config.PendingBuildChanges = true;
+                _store.Config.DevBuild = newDevBuild;
+            }
             _store.Save();
             Raise("stateChanged", GetState());
         }
@@ -686,7 +723,9 @@ namespace RVCPM.Services
                     ["relativePath"] = c.RelativePath ?? "",
                     ["isFile"] = c.IsFile,
                     ["target"] = string.IsNullOrWhiteSpace(c.TargetSuffix) ? "desktop/default" : c.TargetSuffix,
-                    ["settingsCount"] = c.Settings == null ? 0 : c.Settings.Count,
+                    ["settingsCount"] = CountManagerEditableSettings(c.Settings),
+                    ["customSettingsUi"] = HasCustomSettingsUi(c.Settings),
+                    ["customSettingsUiCount"] = CountCustomSettingsUi(c.Settings),
                     ["required"] = c.Required,
                     ["alreadyInstalled"] = _store.Config.Plugins.Any(p => p.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)),
                     ["warnings"] = JArray.FromObject(c.Warnings ?? new List<string>())
@@ -786,10 +825,52 @@ namespace RVCPM.Services
                 File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
         }
 
-        private void TryFlushPendingIfStopped()
+        private void RefreshManagedPluginMetadata()
         {
-            if (_store.Config.PendingPluginSettings.Count == 0 || _discord.IsAnyDiscordRunning()) return;
-            try { _settings.FlushPending(); } catch (Exception ex) { Log("Could not flush pending settings: " + ex.Message); }
+            var changed = false;
+            foreach (var plugin in _store.Config.Plugins.ToList())
+            {
+                try { if (_packages.RefreshInstalledMetadata(_store.Config, plugin)) changed = true; }
+                catch (Exception ex) { Log("Could not refresh metadata for " + plugin.Name + ": " + ex.Message); }
+            }
+            if (changed)
+            {
+                _store.Save();
+                Log("Refreshed plugin metadata/settings schema using RVCPM v0.1.6 parser.");
+            }
+        }
+
+        private void FinalizeAppliedChanges()
+        {
+            foreach (var old in _store.Config.PendingPackageCleanup.ToList())
+            {
+                _packages.RemovePackageFiles(old);
+                RemoveUnusedRepository(old.RepositoryId);
+            }
+            _store.Config.PendingPackageCleanup.Clear();
+            _store.Config.PendingBuildChanges = false;
+            _store.Config.PendingRestart = false;
+            _store.Save();
+        }
+
+        private static bool IsManagerEditableSetting(PluginSettingSchema setting)
+        {
+            return setting != null && setting.UserFacing && setting.EditableInManager && !setting.Hidden;
+        }
+
+        private static int CountManagerEditableSettings(IEnumerable<PluginSettingSchema> settings)
+        {
+            return settings == null ? 0 : settings.Count(IsManagerEditableSetting);
+        }
+
+        private static bool HasCustomSettingsUi(IEnumerable<PluginSettingSchema> settings)
+        {
+            return settings != null && settings.Any(x => x.UserFacing && !x.Hidden && x.Type == PluginSettingType.Component);
+        }
+
+        private static int CountCustomSettingsUi(IEnumerable<PluginSettingSchema> settings)
+        {
+            return settings == null ? 0 : settings.Count(x => x.UserFacing && !x.Hidden && x.Type == PluginSettingType.Component);
         }
 
         private static string Short(string value)

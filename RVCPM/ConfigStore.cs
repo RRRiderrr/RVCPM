@@ -33,6 +33,7 @@ namespace RVCPM
                 if (cfg.Repositories == null) cfg.Repositories = new System.Collections.Generic.List<ManagedRepository>();
                 if (cfg.PendingPluginSettings == null)
                     cfg.PendingPluginSettings = new System.Collections.Generic.Dictionary<string, Newtonsoft.Json.Linq.JObject>(StringComparer.OrdinalIgnoreCase);
+                if (cfg.PendingPackageCleanup == null) cfg.PendingPackageCleanup = new System.Collections.Generic.List<ManagedPlugin>();
                 return cfg;
             }
             catch
