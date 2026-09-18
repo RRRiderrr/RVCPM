@@ -36,6 +36,7 @@ namespace RVCPM.Services
             _github = new GitHubService(_runner, _scanner);
             _discord = new DiscordService(Log);
             _settings = new VencordSettingsService(_store, _discord, Log);
+            _settings.SettingsChanged += OnLiveVencordSettingsChanged;
             _packages = new PackageService(Log);
             _vencord = new VencordService(_store, _runner, _packages, _discord, _settings, ReportProgress, Log);
 
@@ -80,7 +81,7 @@ namespace RVCPM.Services
 
             return new JObject
             {
-                ["appVersion"] = "0.1.6",
+                ["appVersion"] = "0.1.7",
                 ["language"] = _store.Config.Language ?? "en",
                 ["discordBranch"] = _store.Config.DiscordBranch ?? "auto",
                 ["customDiscordLocation"] = _store.Config.CustomDiscordLocation ?? "",
@@ -810,6 +811,30 @@ namespace RVCPM.Services
             Raise("stateChanged", GetState());
         }
 
+        private void OnLiveVencordSettingsChanged(VencordSettingsService.SettingsChangeInfo change)
+        {
+            try
+            {
+                var managedNames = _store.Config.Plugins.Select(p => p.Name).ToArray();
+                _settings.ReconcilePendingWithLiveChange(change, managedNames);
+
+                var managed = new HashSet<string>(managedNames, StringComparer.OrdinalIgnoreCase);
+                var changedManaged = change.PluginNames.Where(managed.Contains).ToArray();
+                if (changedManaged.Length == 0) return;
+
+                Raise("stateChanged", GetState());
+                Raise("vencordSettingsChanged", new JObject
+                {
+                    ["plugins"] = JArray.FromObject(changedManaged),
+                    ["source"] = "vencord-live"
+                });
+            }
+            catch (Exception ex)
+            {
+                Log("Could not process live Vencord settings change: " + ex.Message);
+            }
+        }
+
         private static void CleanupPluginRollback(PluginRollback rollback)
         {
             if (rollback == null || string.IsNullOrWhiteSpace(rollback.Root)) return;
@@ -836,7 +861,7 @@ namespace RVCPM.Services
             if (changed)
             {
                 _store.Save();
-                Log("Refreshed plugin metadata/settings schema using RVCPM v0.1.6 parser.");
+                Log("Refreshed plugin metadata/settings schema using RVCPM v0.1.7 parser.");
             }
         }
 
@@ -882,6 +907,8 @@ namespace RVCPM.Services
         public void Dispose()
         {
             CancelOperation();
+            try { _settings.SettingsChanged -= OnLiveVencordSettingsChanged; } catch { }
+            try { _settings.Dispose(); } catch { }
             _operationLock.Dispose();
         }
     }

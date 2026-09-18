@@ -17,6 +17,10 @@
   let language = 'en';
   let operationActive = false;
   let operationLog = '';
+  let activeSettingsPluginId = null;
+  let activeSettingsPluginName = '';
+  let settingsModalDirty = false;
+  let liveConflictToastShown = false;
   const pending = new Map();
   let rpcSeq = 0;
 
@@ -48,6 +52,7 @@
 
   function onNativeEvent(name,data){
     if(name==='stateChanged'){state=data||state; renderState(); return;}
+    if(name==='vencordSettingsChanged'){handleLiveVencordSettingsChanged(data); return;}
     if(name==='candidateBatch'){openCandidateModal(data); return;}
     if(name==='operationStarted'){
       operationActive=true; operationLog=''; $('#opLog').textContent=''; $('#operationOverlay').classList.remove('hidden');
@@ -69,6 +74,45 @@
       return;
     }
     if(name==='toast') toast(data?.message||'',data?.kind||'info');
+  }
+
+  async function handleLiveVencordSettingsChanged(data){
+    const names=data?.plugins||[];
+    if(!activeSettingsPluginId||!names.some(n=>String(n).toLowerCase()===String(activeSettingsPluginName).toLowerCase()))return;
+    if(settingsModalDirty){
+      if(!liveConflictToastShown){
+        liveConflictToastShown=true;
+        toast(language==='ru'?'Настройки изменились в Discord. Несохранённые поля RVCPM не перезаписаны.':language==='uk'?'Налаштування змінилися в Discord. Незбережені поля RVCPM не перезаписані.':'Settings changed in Discord. Unsaved RVCPM fields were not overwritten.','info');
+      }
+      return;
+    }
+    try{
+      const data=await rpc('getPluginSettings',{pluginId:activeSettingsPluginId});
+      applyLiveSettingsToOpenModal(data.settings||[]);
+    }catch{}
+  }
+
+  function applyLiveSettingsToOpenModal(settings){
+    settings.forEach(s=>{
+      const el=document.querySelector(`[data-setting-key="${cssEscape(s.key)}"]`);if(!el)return;
+      const value=s.value??s.defaultValue;
+      if(s.type==='Boolean')el.checked=value===true;
+      else if(s.type==='Select'){
+        const idx=(s.options||[]).findIndex(o=>deepEqual((o.Value??o.value),value));
+        if(idx>=0)el.value=String(idx);
+      }else if(el.tagName==='SELECT'){
+        const target=String(value??'');
+        const match=[...el.options].find(o=>String(o.value)===target);
+        if(match)el.value=match.value;
+      }else{
+        el.value=value??'';
+        if(el.classList.contains('slider-control')){
+          const display=el.parentElement?.querySelector('.slider-value');if(display)display.textContent=el.value;
+        }
+      }
+    });
+    settingsModalDirty=false;
+    liveConflictToastShown=false;
   }
 
   function prettyStage(s){return ({toolchain:tr('stageToolchain'),github:'GitHub',plugins:'Plugins+',dependencies:tr('stageDependencies'),build:tr('stageBuild'),discord:tr('stageDiscord'),inject:tr('stageInject'),updates:tr('stageUpdates'),done:tr('stageDone')})[s]||s;}
@@ -155,8 +199,10 @@
       }
       if(!settings.length&&!hasCustomUi)body=`<div class="unsupported-setting">${esc(tr('noConfigurableSettings'))}</div>`;
       const footer=`<button class="btn ghost" data-close>${esc(settings.length?tr('cancel'):tr('close'))}</button>${settings.length?`<button class="btn primary" id="savePluginSettings">${esc(tr('save'))}</button>`:''}`;
-      openModal(`<div class="modal-head"><div><div class="eyebrow">${esc(p.name)}</div><h2>${esc(tr('pluginSettings'))}</h2><p>${esc(p.pluginDescription||p.description||'')}</p></div><button class="modal-close" data-close>×</button></div><div class="modal-body"><div class="settings-form">${body}</div></div><div class="modal-foot">${footer}</div>`);
+      openModal(`<div class="modal-head"><div><div class="eyebrow">${esc(p.name)} <span class="live-sync-badge">LIVE</span></div><h2>${esc(tr('pluginSettings'))}</h2><p>${esc(p.pluginDescription||p.description||'')}</p></div><button class="modal-close" data-close>×</button></div><div class="modal-body"><div class="settings-form">${body}</div></div><div class="modal-foot">${footer}</div>`);
+      activeSettingsPluginId=p.id; activeSettingsPluginName=p.name; settingsModalDirty=false; liveConflictToastShown=false;
       $$('.slider-control').forEach(el=>el.addEventListener('input',()=>{el.parentElement.querySelector('.slider-value').textContent=el.value}));
+      $$('[data-setting-key]').forEach(el=>{el.addEventListener('input',()=>settingsModalDirty=true);el.addEventListener('change',()=>settingsModalDirty=true)});
       $('#savePluginSettings')?.addEventListener('click',async()=>{
         const values={};
         settings.forEach(s=>{
@@ -205,7 +251,7 @@
   }
 
   function openModal(html){$('#modalRoot').innerHTML=`<div class="modal-backdrop"><div class="modal">${html}</div></div>`;$$('[data-close]').forEach(x=>x.addEventListener('click',closeModal));$('.modal-backdrop')?.addEventListener('mousedown',e=>{if(e.target.classList.contains('modal-backdrop'))closeModal()});}
-  function closeModal(){$('#modalRoot').innerHTML='';}
+  function closeModal(){$('#modalRoot').innerHTML='';activeSettingsPluginId=null;activeSettingsPluginName='';settingsModalDirty=false;liveConflictToastShown=false;}
 
   function markdown(src){
     let s=esc(src.slice(0,50000));
