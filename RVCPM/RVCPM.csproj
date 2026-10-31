@@ -58,6 +58,7 @@
     <Compile Include="Services\GitHubService.cs" />
     <Compile Include="Services\DiscordService.cs" />
     <Compile Include="Services\VencordSettingsService.cs" />
+    <Compile Include="Services\VencordBridgeService.cs" />
     <Compile Include="Services\PackageService.cs" />
     <Compile Include="Services\VencordService.cs" />
     <Compile Include="Services\ManagerService.cs" />

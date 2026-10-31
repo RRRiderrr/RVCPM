@@ -21,6 +21,7 @@ namespace RVCPM.Services
         private readonly VencordSettingsService _settings;
         private readonly PackageService _packages;
         private readonly VencordService _vencord;
+        private readonly VencordBridgeService _bridge;
         private readonly ConcurrentDictionary<string, CandidateBatch> _batches = new ConcurrentDictionary<string, CandidateBatch>();
         private readonly SemaphoreSlim _operationLock = new SemaphoreSlim(1, 1);
         private CancellationTokenSource _operationCts;
@@ -39,6 +40,7 @@ namespace RVCPM.Services
             _settings.SettingsChanged += OnLiveVencordSettingsChanged;
             _packages = new PackageService(Log);
             _vencord = new VencordService(_store, _runner, _packages, _discord, _settings, ReportProgress, Log);
+            _bridge = new VencordBridgeService(Log);
 
             CleanupUnreferencedRepositories();
             RefreshManagedPluginMetadata();
@@ -81,7 +83,7 @@ namespace RVCPM.Services
 
             return new JObject
             {
-                ["appVersion"] = "0.1.7",
+                ["appVersion"] = "0.1.9",
                 ["language"] = _store.Config.Language ?? "en",
                 ["discordBranch"] = _store.Config.DiscordBranch ?? "auto",
                 ["customDiscordLocation"] = _store.Config.CustomDiscordLocation ?? "",
@@ -107,7 +109,8 @@ namespace RVCPM.Services
                     "Single-file Vencord userplugins: .ts, .tsx",
                     "Plugin folders: index.ts or index.tsx plus companion files (native.ts, CSS, components, assets)",
                     "ZIP packages containing one or more valid userplugins",
-                    "GitHub repository / tree / blob URLs containing valid userplugins"
+                    "GitHub repository / tree / blob URLs containing valid userplugins",
+                    "Native custom settings UI (OptionType.COMPONENT / settingsAboutComponent) via the RVCPMIntegration Discord bridge"
                 )
             };
         }
@@ -589,6 +592,42 @@ namespace RVCPM.Services
             }).ConfigureAwait(false);
         }
 
+        public async Task OpenCustomSettingsUiAsync(string pluginId)
+        {
+            var plugin = FindPlugin(pluginId);
+            if (!HasCustomSettingsUi(plugin.Settings))
+                throw new InvalidOperationException("This plugin does not expose a Vencord custom settings UI.");
+
+            // The custom React component must run inside Discord. Start Discord if necessary,
+            // then use the deliberately tiny RVCPMIntegration bridge to open Vencord's own
+            // PluginModal for this exact plugin. The existing settings watcher mirrors any
+            // resulting changes back into RVCPM in real time.
+            if (!_discord.IsAnyDiscordRunning())
+            {
+                Log("Discord is not running; starting it for custom settings UI...");
+                if (!string.IsNullOrWhiteSpace(_store.Config.CustomDiscordLocation))
+                    await _discord.StartCustomAsync(_store.Config.CustomDiscordLocation).ConfigureAwait(false);
+                else
+                    await _discord.StartAsync(_store.Config.DiscordBranch).ConfigureAwait(false);
+
+                var started = Stopwatch.StartNew();
+                while (!_discord.IsAnyDiscordRunning() && started.Elapsed < TimeSpan.FromSeconds(12))
+                    await Task.Delay(250).ConfigureAwait(false);
+
+                if (!_discord.IsAnyDiscordRunning())
+                    throw new InvalidOperationException("Discord could not be started automatically.");
+
+                // Process existence precedes renderer/plugin startup. Give Vencord time to load;
+                // the bridge itself still waits for an acknowledgement afterwards.
+                await Task.Delay(2500).ConfigureAwait(false);
+            }
+
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(18)))
+                await _bridge.OpenPluginSettingsAsync(plugin.Name, cts.Token).ConfigureAwait(false);
+
+            _discord.TryActivateDiscordWindow();
+        }
+
         public void SaveAppSettings(JObject values)
         {
             if (values["language"] != null) _store.Config.Language = (string)values["language"] ?? "en";
@@ -861,7 +900,7 @@ namespace RVCPM.Services
             if (changed)
             {
                 _store.Save();
-                Log("Refreshed plugin metadata/settings schema using RVCPM v0.1.7 parser.");
+                Log("Refreshed plugin metadata/settings schema using RVCPM v0.1.9 parser.");
             }
         }
 
@@ -909,6 +948,7 @@ namespace RVCPM.Services
             CancelOperation();
             try { _settings.SettingsChanged -= OnLiveVencordSettingsChanged; } catch { }
             try { _settings.Dispose(); } catch { }
+            try { _bridge.Dispose(); } catch { }
             _operationLock.Dispose();
         }
     }

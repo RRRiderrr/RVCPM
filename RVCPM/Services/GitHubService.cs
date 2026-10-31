@@ -31,7 +31,7 @@ namespace RVCPM.Services
             _scanner = scanner;
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             _http = new HttpClient();
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("RVCPM/0.1.1 (+https://github.com/Vencord/Vencord)");
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("RVCPM/0.1.9 (+https://github.com/Vencord/Vencord)");
             _http.Timeout = TimeSpan.FromSeconds(20);
         }
 

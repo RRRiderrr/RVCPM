@@ -187,6 +187,7 @@ namespace RVCPM
                 case "togglePlugin":
                     _manager.TogglePlugin((string)payload["pluginId"], (bool?)payload["enabled"] ?? false); return _manager.GetState();
                 case "getPluginSettings": return _manager.GetPluginSettings((string)payload["pluginId"]);
+                case "openCustomSettingsUi": await _manager.OpenCustomSettingsUiAsync((string)payload["pluginId"]); return new JObject();
                 case "savePluginSettings":
                     _manager.SavePluginSettings((string)payload["pluginId"], payload["values"] as JObject ?? new JObject()); return _manager.GetState();
                 case "removePlugin":

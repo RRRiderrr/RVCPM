@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -247,11 +248,40 @@ namespace RVCPM.Services
                 await StartAsync(kind).ConfigureAwait(false);
         }
 
+        public bool TryActivateDiscordWindow()
+        {
+            foreach (var processName in new[] { "Discord", "DiscordPTB", "DiscordCanary" })
+            {
+                foreach (var process in SafeGetProcesses(processName))
+                {
+                    try
+                    {
+                        var handle = process.MainWindowHandle;
+                        if (handle == IntPtr.Zero) continue;
+                        ShowWindow(handle, SW_RESTORE);
+                        SetForegroundWindow(handle);
+                        return true;
+                    }
+                    catch { }
+                    finally { try { process.Dispose(); } catch { } }
+                }
+            }
+            return false;
+        }
+
         public string GetStatusLabel()
         {
             var kinds = GetRunningDiscordKinds();
             return kinds.Count == 0 ? "stopped" : string.Join(", ", kinds);
         }
+
+        private const int SW_RESTORE = 9;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         private List<string> ResolveKinds(string branch, bool runningOnly)
         {

@@ -34,7 +34,7 @@ namespace RVCPM.Services
             if (!nameMatch.Success) return null;
 
             var parsedSettings = ParseSettings(entry, text);
-            if (Regex.IsMatch(text, @"\bsettingsAboutComponent\s*:"))
+            if (Regex.IsMatch(text, @"\bsettingsAboutComponent\s*(?::|,)"))
             {
                 parsedSettings.Add(new PluginSettingSchema
                 {
